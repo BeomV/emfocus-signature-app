@@ -14,47 +14,29 @@ export default function SignatureCanvas({ onSave, onClear }: SignatureCanvasProp
   const lastPoint = useRef<{ x: number; y: number } | null>(null);
   // 서명 데이터를 이미지로 저장하여 resize 시 복원
   const savedImageData = useRef<string | null>(null);
+  // hasDrawn 상태를 ref로도 관리 (useCallback 의존성 문제 해결)
+  const hasDrawnRef = useRef(false);
 
-  // 현재 캔버스 내용을 이미지로 저장
-  const saveCanvasImage = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !hasDrawn) return;
-    savedImageData.current = canvas.toDataURL('image/png');
-  }, [hasDrawn]);
-
-  // 저장된 이미지를 캔버스에 복원
-  const restoreCanvasImage = useCallback(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!ctx || !canvas || !savedImageData.current) return;
-
-    const img = new Image();
-    img.onload = () => {
-      const dpr = window.devicePixelRatio || 1;
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      ctx.restore();
+  // 캔버스 컨텍스트 설정 (스케일 리셋 후 재적용)
+  const setupContext = (ctx: CanvasRenderingContext2D, resetTransform = true) => {
+    const dpr = window.devicePixelRatio || 1;
+    if (resetTransform) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0); // 변환 리셋
       ctx.scale(dpr, dpr);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = '#000000';
-    };
-    img.src = savedImageData.current;
-  }, []);
+    }
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#000000';
+  };
 
-  const resizeCanvas = useCallback(() => {
+  // 초기 캔버스 설정 (마운트 시 한 번만 실행)
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const container = canvas.parentElement;
     if (!container) return;
-
-    // resize 전에 현재 캔버스 내용 저장
-    if (hasDrawn && canvas.width > 0 && canvas.height > 0) {
-      savedImageData.current = canvas.toDataURL('image/png');
-    }
 
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -66,36 +48,47 @@ export default function SignatureCanvas({ onSave, onClear }: SignatureCanvasProp
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.scale(dpr, dpr);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = '#000000';
+      setupContext(ctx, true);
     }
 
-    // 저장된 이미지가 있으면 복원
-    if (savedImageData.current) {
-      restoreCanvasImage();
-    }
-  }, [hasDrawn, restoreCanvasImage]);
-
-  useEffect(() => {
-    resizeCanvas();
-    
-    // resize 이벤트 대신 visualViewport 변경 감지 (모바일 키보드 대응)
-    // 단, 실제 화면 크기 변경 시에만 resize 처리
+    // 실제 화면 너비 변경 시에만 resize 처리
     let lastWidth = window.innerWidth;
     const handleResize = () => {
-      // 너비가 변경된 경우에만 resize 처리 (키보드로 인한 높이 변경은 무시)
       if (Math.abs(window.innerWidth - lastWidth) > 10) {
         lastWidth = window.innerWidth;
-        resizeCanvas();
+        
+        // resize 전에 현재 캔버스 내용 저장
+        if (hasDrawnRef.current && canvas.width > 0 && canvas.height > 0) {
+          savedImageData.current = canvas.toDataURL('image/png');
+        }
+
+        const newRect = container.getBoundingClientRect();
+        canvas.width = newRect.width * dpr;
+        canvas.height = newRect.height * dpr;
+        canvas.style.width = `${newRect.width}px`;
+        canvas.style.height = `${newRect.height}px`;
+
+        const newCtx = canvas.getContext('2d');
+        if (newCtx) {
+          setupContext(newCtx, true);
+          
+          // 저장된 이미지가 있으면 복원
+          if (savedImageData.current) {
+            const img = new Image();
+            img.onload = () => {
+              newCtx.setTransform(1, 0, 0, 1, 0, 0);
+              newCtx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              setupContext(newCtx, true); // 복원 후 다시 설정
+            };
+            img.src = savedImageData.current;
+          }
+        }
       }
     };
     
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [resizeCanvas]);
+  }, []); // 의존성 배열 비움 - 마운트 시 한 번만 실행
 
   const getCoordinates = (e: React.TouchEvent | React.MouseEvent): { x: number; y: number } => {
     const canvas = canvasRef.current;
@@ -123,6 +116,7 @@ export default function SignatureCanvas({ onSave, onClear }: SignatureCanvasProp
     lastPoint.current = coords;
     setIsDrawing(true);
     setHasDrawn(true);
+    hasDrawnRef.current = true;
   };
 
   const draw = (e: React.TouchEvent | React.MouseEvent) => {
@@ -147,7 +141,7 @@ export default function SignatureCanvas({ onSave, onClear }: SignatureCanvasProp
     if (isDrawing) {
       // 그리기가 끝날 때 캔버스 내용 저장
       const canvas = canvasRef.current;
-      if (canvas && hasDrawn) {
+      if (canvas && hasDrawnRef.current) {
         savedImageData.current = canvas.toDataURL('image/png');
       }
     }
@@ -160,8 +154,12 @@ export default function SignatureCanvas({ onSave, onClear }: SignatureCanvasProp
     const ctx = canvas?.getContext('2d');
     if (!ctx || !canvas) return;
 
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setupContext(ctx, true); // 변환 리셋 후 스케일 재적용
+    
     setHasDrawn(false);
+    hasDrawnRef.current = false;
     savedImageData.current = null; // 저장된 이미지도 초기화
     onClear();
   };
