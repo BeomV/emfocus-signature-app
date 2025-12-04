@@ -36,12 +36,15 @@ export default function Home() {
       const response = await fetch(signatureData);
       const blob = await response.blob();
 
+      // 특수문자 제거 (한글, 영문, 숫자, 공백, 하이픈, 언더스코어 허용)
       const sanitizedFileName = fileName
         .trim()
-        .replace(/[^a-zA-Z0-9가-힣\s-_]/g, '')
+        .replace(/[^a-zA-Z0-9가-힣\s\-_]/g, '')
         .replace(/\s+/g, '_');
 
-      const finalFileName = `${sanitizedFileName}_${Date.now()}.png`;
+      // 한글 파일명을 URL 인코딩하여 Supabase Storage 호환성 확보
+      const encodedFileName = encodeURIComponent(sanitizedFileName);
+      const finalFileName = `${encodedFileName}_${Date.now()}.png`;
 
       const { error } = await supabase.storage
         .from('signatures')
